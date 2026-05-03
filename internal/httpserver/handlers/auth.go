@@ -3,6 +3,7 @@ package handlers
 import (
 	"encoding/json"
 	"errors"
+	"log/slog"
 	"net/http"
 
 	"whisper/internal/httpserver/middleware"
@@ -34,12 +35,15 @@ func (h *AuthHandler) Register(w http.ResponseWriter, r *http.Request) {
 	user, err := h.authSvc.Register(r.Context(), req.Username, req.Password)
 	if err != nil {
 		if errors.Is(err, service.ErrUserExists) {
+			slog.Warn("registration conflict", "username", req.Username)
 			writeError(w, http.StatusConflict, "username already taken")
 			return
 		}
+		slog.Error("registration failed", "username", req.Username, "error", err)
 		writeError(w, http.StatusInternalServerError, "registration failed")
 		return
 	}
+	slog.Info("user registered", "username", user.Username, "id", user.ID)
 	writeJSON(w, http.StatusCreated, map[string]string{
 		"id":       user.ID,
 		"username": user.Username,
@@ -56,15 +60,18 @@ func (h *AuthHandler) Login(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	token, _, err := h.authSvc.Login(r.Context(), req.Username, req.Password)
+	token, user, err := h.authSvc.Login(r.Context(), req.Username, req.Password)
 	if err != nil {
 		if errors.Is(err, service.ErrInvalidCreds) {
+			slog.Warn("login failed — bad credentials", "username", req.Username)
 			writeError(w, http.StatusUnauthorized, "invalid username or password")
 			return
 		}
+		slog.Error("login error", "username", req.Username, "error", err)
 		writeError(w, http.StatusInternalServerError, "login failed")
 		return
 	}
+	slog.Info("user logged in", "username", user.Username, "id", user.ID)
 	writeJSON(w, http.StatusOK, map[string]string{"token": token})
 }
 

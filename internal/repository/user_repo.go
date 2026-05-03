@@ -56,6 +56,22 @@ func (r *UserRepo) GetByUsername(ctx context.Context, username string) (*models.
 	return u, nil
 }
 
+func (r *UserRepo) GetByID(ctx context.Context, id string) (*models.User, error) {
+	u := &models.User{}
+	err := r.db.QueryRow(ctx,
+		`SELECT id, username, password_hash, created_at
+		 FROM users WHERE id = $1`,
+		id,
+	).Scan(&u.ID, &u.Username, &u.PasswordHash, &u.CreatedAt)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, ErrNotFound
+		}
+		return nil, fmt.Errorf("get user by id: %w", err)
+	}
+	return u, nil
+}
+
 func isUniqueViolation(err error) bool {
 	var pgErr *pgconn.PgError
 	return errors.As(err, &pgErr) && pgErr.Code == "23505"

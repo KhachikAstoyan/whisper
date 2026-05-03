@@ -16,10 +16,25 @@ type Config struct {
 	Env         string `envconfig:"ENV"          default:"dev"`
 }
 
+type ClientConfig struct {
+	ServerURL string `envconfig:"SERVER_URL" default:"http://localhost:8080"`
+}
+
 func Load() *Config {
 	loadDotEnv()
 
 	var cfg Config
+	if err := envconfig.Process("", &cfg); err != nil {
+		fmt.Fprintf(os.Stderr, "fatal: configuration error: %v\n", err)
+		os.Exit(1)
+	}
+	return &cfg
+}
+
+func LoadClient() *ClientConfig {
+	loadDotEnv()
+
+	var cfg ClientConfig
 	if err := envconfig.Process("", &cfg); err != nil {
 		fmt.Fprintf(os.Stderr, "fatal: configuration error: %v\n", err)
 		os.Exit(1)
