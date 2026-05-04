@@ -1,9 +1,10 @@
 package main
 
 import (
-	"flag"
+	"bufio"
 	"fmt"
 	"os"
+	"strings"
 	"syscall"
 
 	"golang.org/x/term"
@@ -24,6 +25,8 @@ func main() {
 	cmd := os.Args[1]
 
 	switch cmd {
+	case "init":
+		cmdInit(c)
 	case "register":
 		cmdRegister(c)
 	case "login":
@@ -49,16 +52,67 @@ func main() {
 	}
 }
 
-func cmdRegister(c *client.Client) {
-	fs := flag.NewFlagSet("register", flag.ExitOnError)
-	username := fs.String("username", "", "username for the new account")
-	fs.Parse(os.Args[2:])
+func cmdInit(c *client.Client) {
+	fmt.Println("=== whisper init ===")
 
-	if *username == "" {
-		fmt.Fprintln(os.Stderr, "usage: client register -username <name>")
-		os.Exit(1)
+	alreadyRegistered, err := readConfirm("already have an account? [y/N]: ")
+	if err != nil {
+		fatal(err)
 	}
 
+	username, err := readLine("username: ")
+	if err != nil {
+		fatal(err)
+	}
+	pw, err := readPassword("password: ")
+	if err != nil {
+		fatal(err)
+	}
+
+	step := 1
+	total := 3
+	if !alreadyRegistered {
+		total = 4
+		confirm, err := readPassword("confirm password: ")
+		if err != nil {
+			fatal(err)
+		}
+		if pw != confirm {
+			fatal(fmt.Errorf("passwords do not match"))
+		}
+
+		fmt.Printf("\n[%d/%d] registering account...\n", step, total)
+		if err := c.Register(username, pw); err != nil {
+			fatal(err)
+		}
+		step++
+	}
+
+	fmt.Printf("[%d/%d] logging in...\n", step, total)
+	if err := c.Login(username, pw); err != nil {
+		fatal(err)
+	}
+	step++
+
+	fmt.Printf("[%d/%d] generating RSA-2048 key pair...\n", step, total)
+	if err := c.Keygen(); err != nil {
+		fatal(err)
+	}
+	step++
+
+	fmt.Printf("[%d/%d] uploading public key to server...\n", step, total)
+	if err := c.UploadPublicKey(); err != nil {
+		fatal(err)
+	}
+
+	fmt.Printf("\nready. logged in as %q with keys on server.\n", username)
+}
+
+func cmdRegister(c *client.Client) {
+	username, err := readLine("username: ")
+	if err != nil {
+		fatal(err)
+	}
 	pw, err := readPassword("password: ")
 	if err != nil {
 		fatal(err)
@@ -71,27 +125,22 @@ func cmdRegister(c *client.Client) {
 		fatal(fmt.Errorf("passwords do not match"))
 	}
 
-	if err := c.Register(*username, pw); err != nil {
+	if err := c.Register(username, pw); err != nil {
 		fatal(err)
 	}
 }
 
 func cmdLogin(c *client.Client) {
-	fs := flag.NewFlagSet("login", flag.ExitOnError)
-	username := fs.String("username", "", "username")
-	fs.Parse(os.Args[2:])
-
-	if *username == "" {
-		fmt.Fprintln(os.Stderr, "usage: client login -username <name>")
-		os.Exit(1)
+	username, err := readLine("username: ")
+	if err != nil {
+		fatal(err)
 	}
-
 	pw, err := readPassword("password: ")
 	if err != nil {
 		fatal(err)
 	}
 
-	if err := c.Login(*username, pw); err != nil {
+	if err := c.Login(username, pw); err != nil {
 		fatal(err)
 	}
 }
@@ -122,16 +171,16 @@ func cmdUploadKey(c *client.Client) {
 }
 
 func cmdSend(c *client.Client) {
-	fs := flag.NewFlagSet("send", flag.ExitOnError)
-	to := fs.String("to", "", "recipient username")
-	fs.Parse(os.Args[2:])
-
-	if *to == "" || fs.NArg() < 1 {
-		fmt.Fprintln(os.Stderr, "usage: client send -to <username> <file>")
-		os.Exit(1)
+	to, err := readLine("recipient username: ")
+	if err != nil {
+		fatal(err)
+	}
+	filePath, err := readLine("file path: ")
+	if err != nil {
+		fatal(err)
 	}
 
-	if err := c.Send(*to, fs.Arg(0)); err != nil {
+	if err := c.Send(to, filePath); err != nil {
 		fatal(err)
 	}
 }
@@ -143,19 +192,39 @@ func cmdList(c *client.Client) {
 }
 
 func cmdReceive(c *client.Client) {
-	fs := flag.NewFlagSet("receive", flag.ExitOnError)
-	id := fs.String("id", "", "transfer ID")
-	out := fs.String("out", "", "output file path (default: original filename)")
-	fs.Parse(os.Args[2:])
-
-	if *id == "" {
-		fmt.Fprintln(os.Stderr, "usage: client receive -id <transfer-id> [-out <file>]")
-		os.Exit(1)
-	}
-
-	if err := c.Receive(*id, *out); err != nil {
+	id, err := readLine("transfer ID: ")
+	if err != nil {
 		fatal(err)
 	}
+	out, err := readLine("output path (leave blank for original filename): ")
+	if err != nil {
+		fatal(err)
+	}
+
+	if err := c.Receive(id, out); err != nil {
+		fatal(err)
+	}
+}
+
+func readConfirm(prompt string) (bool, error) {
+	answer, err := readLine(prompt)
+	if err != nil {
+		return false, err
+	}
+	answer = strings.ToLower(strings.TrimSpace(answer))
+	return answer == "y" || answer == "yes", nil
+}
+
+func readLine(prompt string) (string, error) {
+	fmt.Print(prompt)
+	scanner := bufio.NewScanner(os.Stdin)
+	if !scanner.Scan() {
+		if err := scanner.Err(); err != nil {
+			return "", err
+		}
+		return "", fmt.Errorf("unexpected EOF")
+	}
+	return strings.TrimSpace(scanner.Text()), nil
 }
 
 func readPassword(prompt string) (string, error) {
@@ -177,11 +246,14 @@ func usage() {
 	fmt.Print(`whisper — end-to-end encrypted file transfer
 
 usage:
-  client <command> [flags]
+  client <command>
+
+quickstart:
+  init                                register, generate keys, upload in one step
 
 identity:
-  register  -username <name>          create a new account
-  login     -username <name>          authenticate and save credentials
+  register                            create a new account (interactive)
+  login                               authenticate and save credentials (interactive)
   logout                              remove saved credentials
   whoami                              print the logged-in user
 
@@ -190,9 +262,9 @@ keys:
   upload-key                          upload public key to server
 
 files:
-  send      -to <username> <file>     encrypt and send a file
+  send                                encrypt and send a file (interactive)
   list                                list files received by you
-  receive   -id <id> [-out <file>]    download, verify, and decrypt a file
+  receive                             download, verify, and decrypt a file (interactive)
 
 environment:
   SERVER_URL   server base URL (default: http://localhost:8080)
